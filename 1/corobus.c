@@ -298,54 +298,88 @@ coro_bus_recv(struct coro_bus *bus, int channel, unsigned *data)
 int
 coro_bus_broadcast(struct coro_bus *bus, unsigned data)
 {
-	if (bus->channel_count == 0) {
-		coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
-		return -1;
-	}
+    if (bus->channel_count == 0) {
+        coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
+        return -1;
+    }
 
-	while (1) {
-		bool all_sent = true;
+    bool has_open_channels = false;
+    for (int i = 0; i < bus->channel_count; ++i) {
+        if (bus->channels[i] != NULL) {
+            has_open_channels = true;
+            break;
+        }
+    }
 
-		for (int i = 0; i < bus->channel_count; ++i) {
-			if (coro_bus_try_send(bus, i, data) == -1) {
-				if (coro_bus_errno() == CORO_BUS_ERR_WOULD_BLOCK) {
-					wakeup_queue_suspend_this(&bus->channels[i]->send_queue);
-					all_sent = false;
-				} else {
-					return -1;
-				}
-			}
-		}
+    if (!has_open_channels) {
+        coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
+        return -1;
+    }
 
-		if (all_sent) break;
-	}
+    while (1) {
+        int result = coro_bus_try_broadcast(bus, data);
+        if (result == 0) {
+            return 0;
+        }
 
-	return 0;
+        if (coro_bus_errno() != CORO_BUS_ERR_WOULD_BLOCK) {
+            return -1;
+        }
+
+        for (int i = 0; i < bus->channel_count; ++i) {
+            if (bus->channels[i] == NULL) {
+                continue;
+            }
+
+            if (bus->channels[i]->data.size >= bus->channels[i]->size_limit) {
+                wakeup_queue_suspend_this(&bus->channels[i]->send_queue);
+            }
+        }
+    }
 }
 
 int
 coro_bus_try_broadcast(struct coro_bus *bus, unsigned data)
 {
-	if (bus->channel_count == 0) {
-		coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
-		return -1;
-	}
+    if (bus->channel_count == 0) {
+        coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
+        return -1;
+    }
 
-	// Пытаемся отправить сообщение во все каналы
-	for (int i = 0; i < bus->channel_count; ++i) {
-		if (coro_bus_try_send(bus, i, data) == -1) {
-			if (coro_bus_errno() == CORO_BUS_ERR_WOULD_BLOCK) {
-				// Хотя бы один канал переполнен
-				coro_bus_errno_set(CORO_BUS_ERR_WOULD_BLOCK);
-				return -1;
-			} else {
-				// Другая ошибка (например, канал не существует)
-				return -1;
-			}
-		}
-	}
+    bool has_open_channels = false;
+    for (int i = 0; i < bus->channel_count; ++i) {
+        if (bus->channels[i] != NULL) {
+            has_open_channels = true;
+            break;
+        }
+    }
 
-	return 0;
+    if (!has_open_channels) {
+        coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
+        return -1;
+    }
+
+    for (int i = 0; i < bus->channel_count; ++i) {
+        if (bus->channels[i] == NULL) {
+            continue;
+        }
+
+        if (bus->channels[i]->data.size >= bus->channels[i]->size_limit) {
+            coro_bus_errno_set(CORO_BUS_ERR_WOULD_BLOCK);
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < bus->channel_count; ++i) {
+        if (bus->channels[i] == NULL) {
+            continue;
+        }
+
+        data_vector_append(&bus->channels[i]->data, data);
+        wakeup_queue_wakeup_first(&bus->channels[i]->recv_queue);
+    }
+
+    return 0;
 }
 #endif
 
