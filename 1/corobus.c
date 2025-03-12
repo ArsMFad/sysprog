@@ -280,14 +280,13 @@ coro_bus_recv(struct coro_bus *bus, int channel, unsigned *data)
 
     while (coro_bus_try_recv(bus, channel, data) != 0) {
         if (bus->channels[channel] == NULL) {
-            // Канал был закрыт
             coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
             return -1;
         }
         wakeup_queue_suspend_this(&ch->recv_queue);
     }
 
-    // Пробуждаем только если есть корутины в очереди отправителей
+    // Пробуждаем корутину, ожидающую отправки сообщения
     if (!rlist_empty(&ch->send_queue.coros)) {
         wakeup_queue_wakeup_first(&ch->send_queue);
     }
@@ -311,7 +310,7 @@ coro_bus_try_recv(struct coro_bus *bus, int channel, unsigned *data)
 
     *data = data_vector_pop_first(&ch->data);
 
-    // Пробуждаем только если есть корутины в очереди отправителей
+    // Пробуждаем корутину, ожидающую отправки сообщения
     if (!rlist_empty(&ch->send_queue.coros)) {
         wakeup_queue_wakeup_first(&ch->send_queue);
     }
