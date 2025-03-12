@@ -89,14 +89,11 @@ wakeup_queue_suspend_this(struct wakeup_queue *queue)
 
     // Проверяем, что есть другие активные корутины
     if (rlist_empty(&queue->coros)) {
-        printf("Error: deadlock - suspension with no active coroutines\n");
         exit(-1);
     }
 
-    printf("Coro %p suspended (queue: %p)\n", entry.coro, queue);
     coro_suspend();
     rlist_del_entry(&entry, base);
-    printf("Coro %p resumed (queue: %p)\n", entry.coro, queue);
 }
 
 /** Wakeup the first coroutine in the queue. */
@@ -104,12 +101,10 @@ static void
 wakeup_queue_wakeup_first(struct wakeup_queue *queue)
 {
 	if (rlist_empty(&queue->coros)) {
-		//printf("No coros to wake up (queue: %p)\n", queue);
 		return;
 	}
 	struct wakeup_entry *entry = rlist_first_entry(&queue->coros,
 		struct wakeup_entry, base);
-	//printf("Waking up coro %p (queue: %p)\n", entry->coro, queue);
 	coro_wakeup(entry->coro);
 }
 
@@ -203,8 +198,6 @@ coro_bus_channel_close(struct coro_bus *bus, int channel)
     }
     struct coro_bus_channel *ch = bus->channels[channel];
 
-    printf("Closing channel %d\n", channel);
-
     // Пробуждаем все корутины в очереди отправки
     while (!rlist_empty(&ch->send_queue.coros)) {
         struct wakeup_entry *entry = rlist_shift_entry(&ch->send_queue.coros, struct wakeup_entry, base);
@@ -234,22 +227,14 @@ coro_bus_send(struct coro_bus *bus, int channel, unsigned data)
     }
     struct coro_bus_channel *ch = bus->channels[channel];
 
-    //printf("Trying to send data %u to channel %d (size: %zu, limit: %zu)\n",
-           //data, channel, ch->data.size, ch->size_limit);
-
     while (coro_bus_try_send(bus, channel, data) != 0) {
         if (bus->channels[channel] == NULL) {
             // Канал был закрыт
             coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
             return -1;
         }
-        //printf("Channel %d is full, suspending coro %p\n", channel, coro_this());
         wakeup_queue_suspend_this(&ch->send_queue);
-        //printf("Coro %p resumed, checking channel %d (size: %zu, limit: %zu)\n",
-               //coro_this(), channel, ch->data.size, ch->size_limit);
     }
-
-    //printf("Data %u sent to channel %d (size: %zu)\n", data, channel, ch->data.size);
 
     // Пробуждаем только если есть корутины в очереди получателей
     if (!rlist_empty(&ch->recv_queue.coros)) {
@@ -275,7 +260,6 @@ coro_bus_try_send(struct coro_bus *bus, int channel, unsigned data)
     }
 
     data_vector_append(&ch->data, data);
-    //printf("Data %u sent to channel %d (size: %zu)\n", data, channel, ch->data.size);
 
     // Пробуждаем только если есть корутины в очереди получателей
     if (!rlist_empty(&ch->recv_queue.coros)) {
@@ -294,21 +278,14 @@ coro_bus_recv(struct coro_bus *bus, int channel, unsigned *data)
     }
     struct coro_bus_channel *ch = bus->channels[channel];
 
-    //printf("Trying to recv data from channel %d (size: %zu)\n", channel, ch->data.size);
-
     while (coro_bus_try_recv(bus, channel, data) != 0) {
         if (bus->channels[channel] == NULL) {
             // Канал был закрыт
             coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
             return -1;
         }
-        //printf("Channel %d is empty, suspending coro %p\n", channel, coro_this());
         wakeup_queue_suspend_this(&ch->recv_queue);
-        //printf("Coro %p resumed, checking channel %d (size: %zu)\n",
-               //coro_this(), channel, ch->data.size);
     }
-
-    //printf("Data %u received from channel %d (size: %zu)\n", *data, channel, ch->data.size);
 
     // Пробуждаем только если есть корутины в очереди отправителей
     if (!rlist_empty(&ch->send_queue.coros)) {
@@ -333,7 +310,6 @@ coro_bus_try_recv(struct coro_bus *bus, int channel, unsigned *data)
     }
 
     *data = data_vector_pop_first(&ch->data);
-    //printf("Data %u received from channel %d (size: %zu)\n", *data, channel, ch->data.size);
 
     // Пробуждаем только если есть корутины в очереди отправителей
     if (!rlist_empty(&ch->send_queue.coros)) {
@@ -349,41 +325,58 @@ coro_bus_try_recv(struct coro_bus *bus, int channel, unsigned *data)
 int
 coro_bus_broadcast(struct coro_bus *bus, unsigned data)
 {
+    printf("Starting broadcast for data: %u\n", data);
     int sent = 0;
     for (int i = 0; i < bus->channel_count; ++i) {
         if (bus->channels[i] != NULL) {
+            printf("Trying to send to channel %d\n", i);
             while (coro_bus_try_send(bus, i, data) != 0) {
-                // Если канал полон, приостанавливаем корутину
+                printf("Channel %d is full, suspending coroutine\n", i);
                 wakeup_queue_suspend_this(&bus->channels[i]->send_queue);
+                printf("Coroutine resumed for channel %d\n", i);
+                // После пробуждения проверяем, что канал все еще существует
+                if (bus->channels[i] == NULL) {
+                    printf("Channel %d was closed, returning error\n", i);
+                    coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
+                    return -1;
+                }
             }
+            printf("Successfully sent to channel %d\n", i);
             sent++;
         }
     }
     if (sent == 0) {
+        printf("No channels available, returning error\n");
         coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
         return -1;
     }
+    printf("Broadcast completed successfully\n");
     return 0;
 }
 
 int
 coro_bus_try_broadcast(struct coro_bus *bus, unsigned data)
 {
+    printf("Starting try_broadcast for data: %u\n", data);
     int sent = 0;
     for (int i = 0; i < bus->channel_count; ++i) {
         if (bus->channels[i] != NULL) {
+            printf("Trying to send to channel %d\n", i);
             if (coro_bus_try_send(bus, i, data) != 0) {
-                // Если хотя бы один канал полон, возвращаем ошибку
+                printf("Channel %d is full, returning error\n", i);
                 coro_bus_errno_set(CORO_BUS_ERR_WOULD_BLOCK);
                 return -1;
             }
+            printf("Successfully sent to channel %d\n", i);
             sent++;
         }
     }
     if (sent == 0) {
+        printf("No channels available, returning error\n");
         coro_bus_errno_set(CORO_BUS_ERR_NO_CHANNEL);
         return -1;
     }
+    printf("Try_broadcast completed successfully\n");
     return 0;
 }
 #endif
