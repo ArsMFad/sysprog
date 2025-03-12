@@ -127,8 +127,8 @@ int
 coro_bus_try_recv(struct coro_bus *bus, int channel, unsigned *data);
 
 
+#if NEED_BROADCAST /* Bonus 1 */
 
-#if NEED_BROADCAST
 /**
  * Send the given message to all the registered channels at once.
  * If any of the channels are full, then the message isn't sent
@@ -158,8 +158,7 @@ coro_bus_broadcast(struct coro_bus *bus, unsigned data);
 int
 coro_bus_try_broadcast(struct coro_bus *bus, unsigned data);
 
-#endif
-
+#endif /* Bonus 1 */
 
 #if NEED_BATCH /* Bonus 2 */
 
